@@ -1,0 +1,119 @@
+<html>
+<body>
+    Local: 
+    <video id="localVideo" style="width:300px;" autoplay></video> 
+    Remote:  
+    <video id="remoteVideo" style="width:300px;" autoplay></video>
+
+    <script >
+        // 仅仅用于控制哪一端的浏览器发起offer，#号后面有值的一方发起
+        var isCaller = window.location.href.split('#')[1];
+
+        // 与信令服务器的WebSocket连接
+        var socket = new WebSocket("ws://127.0.0.1:3000");
+		socket.onopen = function(evt){
+			socket.send(JSON.stringify({
+				"event": "connection",
+				"clientip":"172.168.4.4"
+			}));
+		};
+ 
+		var pc = new webkitRTCPeerConnection(null);
+
+        // 发送ICE候选到其他客户端
+        pc.onicecandidate = function(event){
+			
+            if (event.candidate !== null) {
+				console.log(event);
+                socket.send(JSON.stringify({
+                    "event": "_ice_candidate",
+					"clientip":"172.168.4.4",
+					"callip":"172.168.4.5",
+                    "data": {
+                        "candidate": event.candidate
+                    }
+                }));
+            }
+        };
+
+        // 如果检测到媒体流连接到本地，将其绑定到一个video标签上输出
+        pc.onaddstream = function(event){
+            document.getElementById('remoteVideo').src = URL.createObjectURL(event.stream);
+        };
+
+        // 发送offer和answer的函数，发送本地session描述
+        var sendOfferFn = function(desc){
+			console.log("desc:");
+			console.log(desc);
+            pc.setLocalDescription(desc);
+            socket.send(JSON.stringify({ 
+                "event": "_offer",
+				"sender":"call",
+				"clientip":"172.168.4.4",
+				"callip":"172.168.4.5",
+                "data": {
+                    "sdp": desc
+                }
+            }));
+        },
+        sendAnswerFn = function(desc){
+            pc.setLocalDescription(desc);
+            socket.send(JSON.stringify({ 
+                "event": "_answer",
+				"sender":"call",
+				"clientip":"172.168.4.4",
+				"callip":"172.168.4.5",
+                "data": {
+                    "sdp": desc
+                }
+            }));
+        };
+
+		window.AudioContext = window.AudioContext ||  window.webkitAudioContext;
+		var context = new AudioContext();
+        // 获取本地音频和视频流
+        navigator.webkitGetUserMedia({
+            "audio": false,
+            "video": true
+        }, function(stream){
+            //绑定本地媒体流到video标签用于输出
+            document.getElementById('localVideo').src = URL.createObjectURL(stream);
+            //向PeerConnection中加入需要发送的流
+            pc.addStream(stream);
+            //如果是发起方则发送一个offer信令
+			pc.createOffer(sendOfferFn, function (error) {
+				console.log('Failure callback: ' + error);
+			});
+
+			/*
+			var microphone = context.createMediaStreamSource(stream);
+			//var filter = context.createBiquadFilter();
+			var filter = context.createScriptProcessor();
+			//reateGain
+			console.log(context);
+
+			// microphone -> filter -> destination.
+			microphone.connect(filter);
+			filter.connect(context.destination);
+			*/
+
+        }, function(error){
+            //处理媒体流创建失败错误
+            console.log('getUserMedia error: ' + error);
+        });
+
+        //处理到来的信令
+        socket.onmessage = function(event){
+            var json = JSON.parse(event.data);
+            console.log('onmessage: ', json);
+            //如果是一个ICE的候选，则将其加入到PeerConnection中，否则设定对方的session描述为传递过来的描述
+            if( json.event === "_ice_candidate" ){
+                pc.addIceCandidate(new RTCIceCandidate(json.data.candidate));
+            } else {
+                pc.setRemoteDescription(new RTCSessionDescription(json.data.sdp));
+               
+            }
+        };
+    </script>
+</body>
+</html>
